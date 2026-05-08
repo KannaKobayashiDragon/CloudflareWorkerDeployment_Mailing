@@ -25,8 +25,8 @@ A professional-grade reference implementation for a secure contact form. Unlike 
 ## 🏗️ Architecture & Flow
 
 ```text
-   Browser                                Cloudflare
-   ─────────                              ──────────────────────────────
+      Browser                                                 Cloudflare
+   ──────────                              ──────────────────────────────
    User fills form
         │
         │  Turnstile widget (managed mode)              ← embedded iframe
