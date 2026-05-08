@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact Form — Cloudflare Turnstile PoC</title>
+    <link rel="stylesheet" href="Form.css">
+
+    <!-- Cloudflare Turnstile — loads asynchronously, exposes window.turnstile -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+</head>
+<body>
+
+    <main class="container">
+        <h1>Contact</h1>
+
+        <form id="contact-form" novalidate>
+            <input
+                type="text"
+                id="name"
+                name="name"
+                placeholder="Name"
+                maxlength="100"
+                required
+            >
+
+            <input
+                type="email"
+                id="email"
+                name="email"
+                placeholder="Email"
+                maxlength="254"
+                required
+            >
+
+            <textarea
+                id="message"
+                name="message"
+                rows="4"
+                placeholder="Message"
+                maxlength="2000"
+                required
+            ></textarea>
+
+            <!-- Cloudflare Turnstile widget will mount here once the script loads. -->
+            <div id="turnstile-container"></div>
+
+            <!-- Status message — populated by JS, shown only when not idle. -->
+            <div id="status" role="status" aria-live="polite" hidden></div>
+
+            <button type="submit" id="submit-btn">Send</button>
+        </form>
+    </main>
+
+    <script>
+        // ====================================================================
+        // CONFIGURATION — edit these for your deployment
+        // ====================================================================
+
+        // Public Turnstile site key from Cloudflare > Turnstile > <your widget>
+        const TURNSTILE_SITEKEY = "YOUR_TURNSTILE_SITEKEY";
+
+        // Worker endpoint URL from Cloudflare > Workers & Pages > <your worker>
+        const WORKER_URL = "https://your-worker.your-account.workers.dev/";
+
+        // ====================================================================
+        // STATE
+        // ====================================================================
+
+        let turnstileWidgetId = null;
+
+        const form = document.getElementById("contact-form");
+        const statusEl = document.getElementById("status");
+        const submitBtn = document.getElementById("submit-btn");
+        const turnstileContainer = document.getElementById("turnstile-container");
+
+        // ====================================================================
+        // STATUS HELPER
+        // ====================================================================
+
+        // Renders one of: idle (hidden), loading (gray), success (green), error (red).
+        function setStatus(type, message) {
+            if (type === "idle") {
+                statusEl.hidden = true;
+                statusEl.textContent = "";
+                statusEl.className = "";
+                return;
+            }
+            statusEl.hidden = false;
+            statusEl.textContent = message;
+            statusEl.className = `status status-${type}`;
+        }
+
+        // ====================================================================
+        // TURNSTILE WIDGET — render when the async script becomes available
+        // ====================================================================
+
+        // The Turnstile script loads async, so window.turnstile may not exist
+        // immediately. Poll for it for ~8 seconds, then give up gracefully.
+        function renderTurnstile() {
+            if (!window.turnstile || turnstileWidgetId) return;
+            try {
+                turnstileWidgetId = window.turnstile.render(turnstileContainer, {
+                    sitekey: TURNSTILE_SITEKEY,
+                    theme: "light",
+                    callback: function () { setStatus("idle"); },
+                    "error-callback": function () {
+                        setStatus("error", "Security check failed. Please refresh and try again.");
+                    }
+                });
+            } catch (e) {
+                setStatus("error", "Security check could not be loaded.");
+            }
+        }
+
+        if (window.turnstile) {
+            renderTurnstile();
+        } else {
+            let attempts = 0;
+            const interval = setInterval(function () {
+                if (window.turnstile) {
+                    renderTurnstile();
+                    clearInterval(interval);
+                    return;
+                }
+                if (++attempts > 16) {
+                    clearInterval(interval);
+                    setStatus("error", "Security check could not be loaded.");
+                }
+            }, 500);
+        }
+
+        // ====================================================================
+        // SUBMIT HANDLER
+        // ====================================================================
+
+        form.addEventListener("submit", async function (e) {
+            e.preventDefault();
+
+            const name = document.getElementById("name").value;
+            const email = document.getElementById("email").value;
+            const message = document.getElementById("message").value;
+
+            // Front-end validation. The Worker re-validates server-side; never
+            // trust the client alone — but reject obvious mistakes early.
+            if (!name.trim()) return setStatus("error", "Please enter your name.");
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                return setStatus("error", "Please enter a valid email address.");
+            }
+            if (!message.trim()) return setStatus("error", "Please enter a message.");
+
+            // Pull the Turnstile token. Empty token means widget hasn't resolved.
+            let token = "";
+            try {
+                token = turnstileWidgetId
+                    ? window.turnstile.getResponse(turnstileWidgetId)
+                    : window.turnstile.getResponse();
+            } catch (_) { /* token stays empty */ }
+
+            if (!token) return setStatus("error", "Please complete the security check.");
+
+            setStatus("loading", "Sending message...");
+            submitBtn.disabled = true;
+
+            // Reset Turnstile widget after submit (each token is single-use).
+            const resetWidget = function () {
+                if (turnstileWidgetId && window.turnstile) {
+                    window.turnstile.reset(turnstileWidgetId);
+                }
+            };
+
+            // Abort after 10 seconds — prevents an indefinite spinner if the
+            // Worker is unreachable.
+            const controller = new AbortController();
+            const timeoutId = setTimeout(function () { controller.abort(); }, 10000);
+
+            try {
+                const response = await fetch(WORKER_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        email: email,
+                        message: message,
+                        turnstileToken: token
+                    }),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    setStatus("success", "Message sent successfully!");
+                    form.reset();
+                    resetWidget();
+                    // Auto-clear after 5 seconds.
+                    setTimeout(function () { setStatus("idle"); }, 5000);
+                } else {
+                    // Worker returns JSON errors as { success: false, error: "..." }
+                    let errMsg = "Something went wrong. Please try again.";
+                    try {
+                        const data = await response.json();
+                        if (data && data.error) errMsg = data.error;
+                    } catch (_) { /* keep default */ }
+                    resetWidget();
+                    setStatus("error", errMsg);
+                }
+            } catch (error) {
+                clearTimeout(timeoutId);
+                resetWidget();
+                if (error.name === "AbortError") {
+                    setStatus("error", "Request timed out. Please try again.");
+                } else {
+                    setStatus("error", "Could not send message. Please check your connection.");
+                }
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+
+</body>
+</html>
