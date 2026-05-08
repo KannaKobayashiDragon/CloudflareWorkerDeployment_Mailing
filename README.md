@@ -25,8 +25,8 @@ A professional-grade reference implementation for a secure contact form. Unlike 
 ## 🏗️ Architecture & Flow
 
 ```text
-      Browser                                                 Cloudflare
-   ──────────                              ──────────────────────────────
+   Browser                                Cloudflare
+   ─────────                              ──────────────────────────────
    User fills form
         │
         │  Turnstile widget (managed mode)              ← embedded iframe
@@ -167,6 +167,22 @@ Then:
 - **Rate limiting**: Add a Cloudflare Rate Limiting Rule on the Worker route (paid), or implement Worker-level rate limiting via Workers KV (free tier).
 - **Reply-To header**: Add `replyTo: email` inside `env.SE_EMAIL.send()` so hitting Reply in your inbox replies to the inquirer instead of yourself. Verify your email service's exact key name (some use `reply_to`).
 - **Auto-acknowledgement**: Send a second email to the inquirer thanking them. Doubles your quota usage and adds spam-reflection risk if Turnstile is bypassed — only enable once you have rate limiting.
+
+---
+
+## 🤖 AI Coding Stack
+
+| AI Model | Role |
+|---|---|
+| ✅ Claude Opus 4.6 | Primary coding assistant for core development tasks |
+
+---
+
+## 📚 Documentation
+
+| File | Description |
+|---|---|
+| 📄 `Cloudflare Worker Deployment – Mailing Worker.docx` | Step-by-step deployment guide covering the full Cloudflare Worker setup process — from creating the Worker and configuring Email Routing, to binding secrets, setting up Turnstile, and going live |
 
 ---
 
